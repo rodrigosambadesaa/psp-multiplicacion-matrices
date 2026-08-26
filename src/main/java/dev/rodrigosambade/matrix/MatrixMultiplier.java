@@ -1,11 +1,107 @@
 package dev.rodrigosambade.matrix;
-import java.util.*;
-import java.util.concurrent.*;
-public final class MatrixMultiplier{
- private MatrixMultiplier(){}
- private static int[]dimensions(int[][]m){if(m==null||m.length==0||m[0].length==0)throw new IllegalArgumentException("empty matrix");int cols=m[0].length;for(int[]row:m)if(row.length!=cols)throw new IllegalArgumentException("ragged matrix");return new int[]{m.length,cols};}
- private static void validate(int[][]a,int[][]b){int[]da=dimensions(a),db=dimensions(b);if(da[1]!=db[0])throw new IllegalArgumentException("A columns must equal B rows");}
- public static int[][]sequential(int[][]a,int[][]b){validate(a,b);int[][]c=new int[a.length][b[0].length];for(int i=0;i<a.length;i++)computeRow(a,b,c,i);return c;}
- public static int[][]parallel(int[][]a,int[][]b,int parallelism)throws InterruptedException{validate(a,b);if(parallelism<=0)throw new IllegalArgumentException("parallelism");int[][]c=new int[a.length][b[0].length];try(var executor=Executors.newFixedThreadPool(Math.min(parallelism,a.length))){List<Future<?>>futures=new ArrayList<>();for(int i=0;i<a.length;i++){int row=i;futures.add(executor.submit(()->computeRow(a,b,c,row)));}for(Future<?>f:futures)try{f.get();}catch(ExecutionException e){throw new IllegalStateException(e.getCause());}}return c;}
- private static void computeRow(int[][]a,int[][]b,int[][]c,int i){for(int j=0;j<b[0].length;j++){int sum=0;for(int k=0;k<a[0].length;k++)sum=Math.addExact(sum,Math.multiplyExact(a[i][k],b[k][j]));c[i][j]=sum;}}
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+public final class MatrixMultiplier {
+
+    private MatrixMultiplier() {
+    }
+
+    public static int[][] sequential(int[][] left, int[][] right) {
+        validateCompatibility(left, right);
+
+        int[][] result = new int[left.length][right[0].length];
+        for (int row = 0; row < left.length; row++) {
+            computeRow(left, right, result, row);
+        }
+        return result;
+    }
+
+    public static int[][] parallel(int[][] left, int[][] right, int parallelism)
+            throws InterruptedException {
+        validateCompatibility(left, right);
+        if (parallelism <= 0) {
+            throw new IllegalArgumentException("parallelism must be greater than zero");
+        }
+
+        int[][] result = new int[left.length][right[0].length];
+        int workerCount = Math.min(parallelism, left.length);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(workerCount)) {
+            List<Future<?>> tasks = submitRows(left, right, result, executor);
+            waitForCompletion(tasks);
+        }
+
+        return result;
+    }
+
+    private static List<Future<?>> submitRows(
+            int[][] left,
+            int[][] right,
+            int[][] result,
+            ExecutorService executor) {
+        List<Future<?>> tasks = new ArrayList<>(left.length);
+
+        for (int row = 0; row < left.length; row++) {
+            int rowIndex = row;
+            tasks.add(executor.submit(() -> computeRow(left, right, result, rowIndex)));
+        }
+
+        return tasks;
+    }
+
+    private static void waitForCompletion(List<Future<?>> tasks) throws InterruptedException {
+        for (Future<?> task : tasks) {
+            try {
+                task.get();
+            } catch (ExecutionException exception) {
+                throw new IllegalStateException("Matrix worker failed", exception.getCause());
+            }
+        }
+    }
+
+    private static void computeRow(int[][] left, int[][] right, int[][] result, int row) {
+        for (int column = 0; column < right[0].length; column++) {
+            int value = 0;
+
+            for (int index = 0; index < left[0].length; index++) {
+                int product = Math.multiplyExact(left[row][index], right[index][column]);
+                value = Math.addExact(value, product);
+            }
+
+            result[row][column] = value;
+        }
+    }
+
+    private static void validateCompatibility(int[][] left, int[][] right) {
+        Dimensions leftDimensions = dimensionsOf(left, "left");
+        Dimensions rightDimensions = dimensionsOf(right, "right");
+
+        if (leftDimensions.columns() != rightDimensions.rows()) {
+            throw new IllegalArgumentException("Left matrix columns must equal right matrix rows");
+        }
+    }
+
+    private static Dimensions dimensionsOf(int[][] matrix, String name) {
+        if (matrix == null || matrix.length == 0 || matrix[0] == null || matrix[0].length == 0) {
+            throw new IllegalArgumentException(name + " matrix must not be empty");
+        }
+
+        int columns = matrix[0].length;
+        for (int row = 0; row < matrix.length; row++) {
+            if (matrix[row] == null || matrix[row].length != columns) {
+                throw new IllegalArgumentException(name + " matrix must be rectangular");
+            }
+        }
+
+        return new Dimensions(matrix.length, columns);
+    }
+
+    private record Dimensions(int rows, int columns) {
+    }
 }
